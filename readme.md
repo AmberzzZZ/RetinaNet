@@ -10,10 +10,16 @@
     top-down connection: UpSampling2D('nearest')
     head: 3x3x256 conv
     没引入BN
-    本工程的head放在后面的cls和reg分支里面，加上了BN
+    feature map: 8xP3-128xP7, backbone输出的特征图8xC3-32xC5，多出来的64xP6和128xP7通过3x3 stride2 conv得到
+
+    本工程的head放在后面的cls和reg分支里面，
+    本工程的conv后面加上了BN，retina源代码里面有，第三方keras实现里面没有
+    本工程的feature map用的激活函数后的，原fpn论文也是，第三方keras实现用的激活函数前的
+
 
 ## cls
     focal loss, normailization
+    anchor state {-1:ignore, 0:negative, 1:positive}，negative和positive的anchor参与运算
 
 ## box reg
-    l1 loss
+    smooth l1 loss (huber loss)，前景positive参与运算
