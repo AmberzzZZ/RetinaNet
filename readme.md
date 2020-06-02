@@ -23,3 +23,4 @@
 
 ## box reg
     smooth l1 loss (huber loss)，前景positive参与运算
+    coord order: [y_min, x_min, y_max, x_max]
