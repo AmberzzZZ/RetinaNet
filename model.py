@@ -1,11 +1,12 @@
 from backbone import resnet, resnext, Conv_BN
-from keras.layers import Input, UpSampling2D, add, Conv2D, ReLU
+from keras.layers import Input, UpSampling2D, add, Conv2D, Reshape, Lambda
 from keras.models import Model
+from loss import det_loss
 
 backbones = {'resnet': resnet, 'resnext': resnext}
 
 
-def retinaNet(input_tensor=None, input_shape=(224,224,3),
+def retinaNet(input_tensor=None, input_shape=(256,256,3),
               backbone='resnet', depth=50, fpn_filters=256, n_classes=10, n_anchors=9):
     if input_tensor is not None:
         inpt = input_tensor
@@ -23,8 +24,18 @@ def retinaNet(input_tensor=None, input_shape=(224,224,3),
     cls_outputs = cls_head(x, fpn_filters, n_classes, n_anchors)
     box_outputs = box_head(x, fpn_filters, n_anchors)
 
+    # y_true
+    h, w = input_shape[:2]
+    y_true = [Input((h//{0:8,1:16,2:32,3:64,4:128}[i],
+                     w//{0:8,1:16,2:32,3:64,4:128}[i],
+                     n_anchors, n_classes+1+4)) for i in range(5)]
+
+    # loss
+    retina_loss = Lambda(det_loss, arguments={'n_anchors': n_anchors, 'n_classes': n_classes})(
+                         [*cls_outputs,*box_outputs,*y_true])
+
     # model
-    model = Model(inpt, cls_outputs + box_outputs)
+    model = Model([inpt, *y_true], retina_loss)
 
     return model
 
@@ -51,7 +62,9 @@ def cls_head(feats, n_filters, n_classes, n_anchors):
         for i in range(4):
             x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
         # head
-        x = Conv2D(n_classes*n_anchors, 3, strides=1, padding='same', activation='sigmoid')(x)
+        x = Conv2D(n_classes*n_anchors, 3, strides=1, padding='same')(x)
+        h,w = x._keras_shape[1:3]
+        x = Reshape((h,w,n_anchors, n_classes))(x)
         cls_outputs.append(x)
     return cls_outputs
 
@@ -63,13 +76,15 @@ def box_head(feats, n_filters, n_anchors):
             x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
         # head
         x = Conv2D(4*n_anchors, 3, strides=1, padding='same')(x)
+        h,w = x._keras_shape[1:3]
+        x = Reshape((h,w,n_anchors, 4))(x)
         box_outputs.append(x)
     return box_outputs
 
 
 if __name__ == '__main__':
 
-    model = retinaNet(input_shape=(224,224,3))
+    model = retinaNet(input_shape=(256,256,3))
     model.summary()
 
 

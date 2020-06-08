@@ -1,8 +1,10 @@
-## 官方源代码
+## 官方tf源代码
     https://github.com/facebookresearch/Detectron/tree/master/detectron/modeling
+## 第三方keras代码
+    https://github.com/fizyr/keras-retinanet
 
-## resnext
-    分组卷积keras没有
+## backbone
+    resnet, resnext
 
 ## fpn
     fpn原论文实现是
@@ -16,6 +18,17 @@
     本工程的conv后面加上了BN，retina源代码里面有，第三方keras实现里面没有
     本工程的feature map用的激活函数后的，原fpn论文也是，第三方keras实现用的激活函数前的
 
+## head
+    cls head: [B,H,W,a,c]
+    box head: [B,H,W,a,4], coord order: ofset[tx, ty, tw, th]
+    每个level，每个grid，dense predict 9个anchor，one-hot logits & offset box
+
+## rpn offset [t] ---- abs [b]
+    tx = (bx - xa) / wa
+    ty = (by - ya) / ha
+    tw = log(bw / wa)
+    th = log(bh / ha)
+    可以看成是针对anchor的平移和缩放参数
 
 ## cls
     focal loss, normailization
@@ -23,4 +36,7 @@
 
 ## box reg
     smooth l1 loss (huber loss)，前景positive参与运算
-    coord order: [y_min, x_min, y_max, x_max]
+
+## ytrue:
+    cls: one-hot
+    box: abs, coord order: [y_min, x_min, y_max, x_max]
