@@ -42,10 +42,7 @@ def focal(y_true, y_pred, alpha=0.25, gamma=2.0, cutoff=0.5):
 
     # weighting
     cls_pt = tf.where(cls_true>cutoff, cls_pred, 1-cls_pred)
-    alpha_factor = tf.where(cls_true>cutoff, tf.ones_like(cls_true)*alpha, tf.ones_like(cls_true)*(1-alpha))
-    focal_factor = K.pow(1-cls_pt, gamma)
-
-    loss = -alpha_factor*focal_factor*K.log(cls_pt)
+    loss = -alpha*K.pow(1-cls_pt, gamma)*K.log(cls_pt)
     loss = K.sum(loss) / normalizer
 
     return loss
