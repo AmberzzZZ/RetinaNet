@@ -3,11 +3,15 @@ from keras.layers import Input, UpSampling2D, add, Conv2D, Reshape, Lambda
 from keras.models import Model
 from loss import det_loss
 
+
 backbones = {'resnet': resnet, 'resnext': resnext}
+anchors = {'scale': [2**0, 2**(1/3.), 2**(2/3.)],
+           'ratio': [0.5, 1, 2],
+           'size': {8:32, 16:64, 32:128, 64:256, 128:512}}
 
 
 def retinaNet(input_tensor=None, input_shape=(256,256,3),
-              backbone='resnet', depth=50, fpn_filters=256, n_classes=10, n_anchors=9):
+              backbone='resnet', depth=50, fpn_filters=256, n_classes=10, anchors=anchors):
     if input_tensor is not None:
         inpt = input_tensor
         input_shape = inpt._keras_shape[1:]
@@ -21,6 +25,7 @@ def retinaNet(input_tensor=None, input_shape=(256,256,3),
     x = fpn(x[1:], fpn_filters)      # [8xP3, 128xP7]
 
     # head
+    n_anchors = len(anchors['scale']) * len(anchors['ratio'])
     cls_outputs = cls_head(x, fpn_filters, n_classes, n_anchors)
     box_outputs = box_head(x, fpn_filters, n_anchors)
 
@@ -28,11 +33,10 @@ def retinaNet(input_tensor=None, input_shape=(256,256,3),
     h, w = input_shape[:2]
     y_true = [Input((h//{0:8,1:16,2:32,3:64,4:128}[i],
                      w//{0:8,1:16,2:32,3:64,4:128}[i],
-                     n_anchors, n_classes+1+4)) for i in range(5)]
+                     n_anchors, n_classes+4)) for i in range(5)]
 
     # loss
-    retina_loss = Lambda(det_loss, arguments={'n_anchors': n_anchors, 'n_classes': n_classes})(
-                         [*cls_outputs,*box_outputs,*y_true])
+    retina_loss = Lambda(det_loss, arguments={'anchors': anchors})([*cls_outputs,*box_outputs,*y_true])
 
     # model
     model = Model([inpt, *y_true], retina_loss)
@@ -50,8 +54,8 @@ def fpn(feats, fpn_filters):
     P4 = add([C4, P5_up])
     P4_up = UpSampling2D(size=2, interpolation='nearest')(P4)
     P3 = add([C3, P4_up])
-    P6 = Conv2D(fpn_filters, 3, strides=2, padding='same')(feats[-1])
-    P6 = Conv_BN(feats[-1], fpn_filters, 3, strides=2, activation='relu')
+    C6 = Conv2D(fpn_filters, 3, strides=2, padding='same')(feats[-1])
+    P6 = Conv_BN(C6, fpn_filters, 3, strides=2, activation='relu')
     P7 = Conv_BN(P6, fpn_filters, 3, strides=2, activation='relu')
     return [P3, P4, P5, P6, P7]
 

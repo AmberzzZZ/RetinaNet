@@ -38,5 +38,13 @@
     smooth l1 loss (huber loss)，前景positive参与运算
 
 ## ytrue:
-    cls: one-hot
-    box: abs, coord order: [y_min, x_min, y_max, x_max]
+    cls: logits
+    box: rela-origin-[xc,yc,w,h]
+    match: 每个尺度上，每个gt box最多match一个anchor，
+           每个anchor也最多match一个gt box（iou最大的那个）
+
+
+
+
+
+
