@@ -22,6 +22,8 @@
     cls head: [B,H,W,a,c]
     box head: [B,H,W,a,4], coord order: ofset[tx, ty, tw, th]
     每个level，每个grid，dense predict 9个anchor，one-hot logits & offset box
+    shared across scales
+    individual between cls & box
 
 ## rpn offset [t] ---- abs [b]
     tx = (bx - xa) / wa
