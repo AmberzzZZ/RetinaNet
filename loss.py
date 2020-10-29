@@ -35,9 +35,10 @@ def focal_loss(cls_true, cls_pred, alpha=0.25, gamma=2.0, from_logits=True):
     if from_logits:
         cls_pred = K.sigmoid(cls_pred)
     pt = 1 - K.abs(cls_pred-cls_true)
+    pt = K.clip(pt, K.epsilon(), 1-K.epsilon())
     focal_loss_ = -K.pow(1-pt, gamma) * K.log(pt)
     focal_loss_ = tf.where(cls_true>0, (1-alpha)*focal_loss_, alpha*focal_loss_)
-    norm_term = K.sum(cls_true, axis=[1,2,3,4])
+    norm_term = K.maximum(1., K.sum(cls_true, axis=[1,2,3,4]))
     focal_loss_ = K.sum(focal_loss_, axis=[1,2,3,4]) / norm_term
     return K.mean(focal_loss_)
 
@@ -72,9 +73,8 @@ def origin2offset(box_true, stride, anchors, input_shape):
     norm_acxy = (grid + 0.5)/grid_shape[::-1]
     norm_awh = K.reshape(anchors, [1,1,1,anchors.shape[0], anchors.shape[1]]) / input_shape[::-1]
 
-    valid_mask = tf.cast(box_true[...,:2]>0., tf.float32)
-    offset_xy = valid_mask * (box_true[...,:2] - norm_acxy) / norm_awh
-    offset_wh = valid_mask * K.log(box_true[...,2:] / norm_awh)
+    offset_xy = tf.where(box_true[...,:2]>0., (box_true[...,:2] - norm_acxy) / norm_awh, tf.zeros_like(box_true[...,:2]>0.))
+    offset_wh = tf.where(box_true[...,:2]>0., K.log(box_true[...,2:] / norm_awh), tf.zeros_like(box_true[...,:2]>0.))
 
     return K.concatenate([offset_xy, offset_wh])
 
