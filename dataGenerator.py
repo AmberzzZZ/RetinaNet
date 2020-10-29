@@ -3,7 +3,11 @@ import cv2
 import random
 import math
 import os
-from retinaNet import anchors
+
+
+anchors = {'scale': [2**0, 2**(1/3.), 2**(2/3.)],
+           'ratio': [0.5, 1, 2],
+           'size': {8:32, 16:64, 32:128, 64:256, 128:512}}
 
 
 def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, strides=[8,16,32]):

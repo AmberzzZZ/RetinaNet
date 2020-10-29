@@ -1,123 +1,89 @@
 import keras.backend as K
 import tensorflow as tf
 import numpy as np
-import math
+from dataGenerator import get_anchors
 
 
-def det_loss(args, n_anchors, n_classes):
+def det_loss(args, n_classes, anchors, strides, input_shape):
     # *y_true: [B,H,W,a,c+4] for each resolution, start by x8level3
     # *cls_pred: [B,H,W,a,c] for each resolution
     # *box_pred: [B,H,W,a,4] for each resolution
-    n_levels = len(args) // 3
+    n_levels = len(strides)
+    anchors = np.float32(get_anchors(anchors, strides))
+
     cls_preds = args[:n_levels]
-    box_pres = args[n_levels:n_levels*2]
+    box_preds = args[n_levels:n_levels*2]
     y_true = args[n_levels*2:]
-    cls_losses = []
-    box_losses = []
-    for i in range(n_levels):
-        cls_losses.append(focal(y_true[i][...,:n_classes+1], cls_preds[i]))
-        box_losses.append(smooth_l1(y_true[i][...,n_classes:], box_pres[i], i))
-    cls_loss = tf.add_n(cls_losses)
-    box_loss = tf.add_n(box_losses)
-    det_loss = box_loss + cls_loss
 
-    return det_loss
+    # tranverse strides
+    loss = 0.
+    for i, s in enumerate(strides):
+        # cls
+        cls_loss = focal_loss(y_true[i][...,4:4+n_classes], cls_preds[i], from_logits=True)
+        # reg
+        box_true = origin2offset(y_true[i][...,:4], s, anchors[i], input_shape)
+        box_loss = smooth_l1(box_true, box_preds[i], from_logits=True)
 
+        loss += cls_loss + box_loss
 
-# for every resolution
-def focal(y_true, y_pred, alpha=0.25, gamma=2.0, cutoff=0.5):
-    # y_true: [B,H,W,a,c+1], last dim refers to anchor state {-1:ignore, 0:negative, 1:positive}
-    # y_pred: [B,H,W,a,c], logits
-    cls_true = y_true[...,:-1]
-    anchor_state = y_true[...,-1]      # [B,H,W,a]
-
-    # valid anchors
-    indices = tf.where(tf.not_equal(anchor_state, -1))
-    cls_true = tf.gather_nd(cls_true, indices)     # [N,c]
-    cls_pred = tf.gather_nd(y_pred, indices)
-    cls_pred = K.softmax(y_pred)     # posibility
-
-    # normalizer
-    normalizer = tf.cast(K.maximum(1, K.shape(cls_true)[0]), tf.float32)
-
-    # weighting
-    cls_pt = tf.where(cls_true>cutoff, cls_pred, 1-cls_pred)
-    loss = -alpha*K.pow(1-cls_pt, gamma)*K.log(cls_pt)
-    loss = K.sum(loss) / normalizer
+        loss = tf.Print(loss, [cls_loss, box_loss], message="  focal loss & smooth l1 loss: ")
 
     return loss
 
 
-# for every resolution
-def smooth_l1(y_true, y_pred, level, sigma=3.0):
-    # y_true: [B,H,W,a,1+4], first dim refers to anchor state {-1:ignore, 0:negative, 1:positive}
-    # y_pred: [B,H,W,a,4]
-    box_true = y_true[...,:-1]
-    box_true = abs2offset(box_true, level)
-    anchor_state = y_true[...,-1]
-
-    # valid anchors
-    indices = tf.where(tf.equal(anchor_state, 1))
-    box_true = tf.gather_nd(box_true, indices)      # [N,4]
-    box_pred = tf.gather_nd(y_pred, indices)
-
-    # normalizer
-    normalizer = tf.cast(K.maximum(1, K.shape(indices)[0]), tf.float32)
-
-    l1 = K.abs(box_pred-box_true)
-    loss = tf.where(K.less(l1, 1./sigma**2), 0.5*(sigma*l1)**2, l1-0.5/sigma**2)
-    loss = K.sum(loss) / normalizer
-
-    return loss
+def focal_loss(cls_true, cls_pred, alpha=0.25, gamma=2.0, from_logits=True):
+    if from_logits:
+        cls_pred = K.sigmoid(cls_pred)
+    pt = 1 - K.abs(cls_pred-cls_true)
+    focal_loss_ = -K.pow(1-pt, gamma) * K.log(pt)
+    focal_loss_ = tf.where(cls_true>0, (1-alpha)*focal_loss_, alpha*focal_loss_)
+    norm_term = K.sum(cls_true, axis=[1,2,3,4])
+    focal_loss_ = K.sum(focal_loss_, axis=[1,2,3,4]) / norm_term
+    return K.mean(focal_loss_)
 
 
-anchor_config = {
-    'anchor_ratios': [2,1,0.5],
-    'anchor_scales': [math.pow(2,0), math.pow(2,1/3), math.pow(2,2/3)],
-    'anchor_size': [32,64,128,256,512],
-    'output_strides': [8,16,32,64,128]
-}
+def smooth_l1(box_true, box_pred, from_logits=True):
+    # |x|<1: 0.5*x*x, |x|>1: |x|-0.5
+    if from_logits:
+        box_pred_txy = K.tanh(box_pred[...,:2])
+        box_pred_twh = K.relu(box_pred[...,2:])
+        box_pred = K.concatenate([box_pred_txy, box_pred_twh])
+    valid_mask = tf.cast(box_true>0., tf.float32)
+    smooth_l1_ = tf.where(K.abs(box_pred-box_true)<1,
+                          0.5*(box_pred-box_true)*(box_pred-box_true),
+                          abs(box_pred-box_true)-0.5)
+    smooth_l1_ = K.sum(smooth_l1_*valid_mask, axis=[1,2,3,4])
+    return K.mean(smooth_l1_)
 
 
-def get_anchors(anchor_config, level):
-    size = anchor_config['anchor_size'][level]
-    anchors = []
-    for scale in anchor_config['anchor_scales']:
-        area = size * size * scale
-        for ratio in anchor_config['anchor_ratios']:
-            w = int(math.sqrt(area/ratio))
-            h = int(w * ratio)
-            anchors.append([h,w])
-    return np.array(anchors), anchor_config['output_strides'][level]
+def origin2offset(box_true, stride, anchors, input_shape):
+    # box_true: rela-origin-[xc,yc,w,h]
+    # return: rpn offset [offset_x, offset_y, offset_w, offset_h]
+    #                     offset_x = (xc-a_xc)/wa
+    #                     offset_y = (yc-a_yc)/ha
+    #                     offset_w = log(w/wa)
+    #                     offset_h = log(h/wa)
+
+    grid_shape = K.int_shape(box_true)[1:3]    # h,w
+    grid_y = K.tile(K.reshape(K.arange(0, grid_shape[0]), [1,-1,1,1,1]), [1, 1, grid_shape[1], 1, 1])
+    grid_x = K.tile(K.reshape(K.arange(0, grid_shape[1]), [1,1,-1,1,1]), [1, grid_shape[0], 1, 1, 1])
+    grid = K.cast(K.concatenate([grid_x, grid_y]), tf.float32)
+
+    norm_acxy = (grid + 0.5)/grid_shape[::-1]
+    norm_awh = K.reshape(anchors, [1,1,1,anchors.shape[0], anchors.shape[1]]) / input_shape[::-1]
+
+    valid_mask = tf.cast(box_true[...,:2]>0., tf.float32)
+    offset_xy = valid_mask * (box_true[...,:2] - norm_acxy) / norm_awh
+    offset_wh = valid_mask * K.log(box_true[...,2:] / norm_awh)
+
+    return K.concatenate([offset_xy, offset_wh])
 
 
-# convert abs box position to offset based on each anchor
-def abs2offset(yt_boxes, level, anchor_config=anchor_config):
-    # yt_boxes: [B,H,W,a,4], abs [y_min, x_min, y_max, x_max]
-    # offset_boxes: [B,H,W,a,4], offset [tx,ty,tw,th]
-    # anchor
-    anchors, strides = get_anchors(anchor_config, level)     # [9,2] [h,w]
-    n_anchors = anchors.shape[0]
-    anchors = K.cast(K.reshape(anchors, (-1,1,1,n_anchors,2)), tf.float32)
-    # tw, th
-    yt_h = yt_boxes[...,2] - yt_boxes[...,0]
-    offset_h = K.log(yt_h / anchors[...,0])
-    yt_w = yt_boxes[...,3] - yt_boxes[...,1]
-    offset_w = K.log(yt_w / anchors[...,1])
 
-    # grid
-    grid_shape = K.int_shape(yt_boxes)[1:3]
-    h, w = grid_shape
-    x, y = np.meshgrid(np.arange(0, w), np.arange(0, h))
-    anchors_x = K.cast(K.reshape(x, (1,h,w,1)) * strides, tf.float32)
-    anchors_y = K.cast(K.reshape(y, (1,h,w,1)) * strides, tf.float32)
 
-    # ty, tx
-    yt_center_y = (yt_boxes[...,0] + yt_boxes[...,2]) / 2.
-    offset_y = (yt_center_y - anchors_y) / anchors[...,0]
-    yt_center_x = (yt_boxes[...,1] + yt_boxes[...,3]) / 2.
-    offset_x = (yt_center_x - anchors_x) / anchors[...,1]
 
-    offset_boxes = K.stack([offset_x,offset_y,offset_w,offset_h], axis=-1)
-    return offset_boxes
+
+
+
+
 
