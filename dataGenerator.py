@@ -27,10 +27,17 @@ def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, stri
             if np.max(img)>1:
                 img = img / 255.
             boxes = get_box(os.path.join(data_dir, file_name+'.txt'))
-            # img, boxes = aug(img, boxes)
-
+            img, boxes = aug(img, boxes, input_shape)
+            # for obj in range(boxes.shape[0]):
+            #     xc, yc, w, h = boxes[obj][:4]
+            #     cv2.rectangle(img, (int(input_shape[1]*(xc-w/2.)),int(input_shape[0]*(yc-h/2.))), (int(input_shape[1]*(xc+w/2.)),int(input_shape[0]*(yc+h/2.))), 1, 2)
+            # cv2.imshow("tmp1", img)
+            # cv2.waitKey(0)
             img = np.expand_dims(img, axis=-1)
             image_batch[i] = img
+            if boxes.shape[0] <= 0:
+                continue
+
             input_shape = np.array(input_shape)
             boxes_xy = boxes[...,:2] * input_shape[::-1]
             boxes_wh = boxes[...,2:4] * input_shape[::-1]
@@ -103,6 +110,102 @@ def get_box(yolo_file):
     return np.array(boxes)
 
 
+def aug(img, boxes, input_shape):
+    labels = boxes[:,4:5]
+    boxes = boxes[:,:4]
+    h, w = input_shape
+
+    # scale & shift & rotate
+    if random.uniform(0, 1)>0.5:
+        scale_ratio = random.choice([0.25, 0.5, 0.9, 1.0, 1.25])
+        new_h = boxes[:, -1] * scale_ratio * h
+        if np.min(new_h)<15:
+            scale_ratio = 1.
+        boxes = boxes * scale_ratio
+        if scale_ratio!=1:
+            new_h, new_w = int(h*scale_ratio), int(w*scale_ratio)
+            img = cv2.resize(img, (new_w, new_h))
+            if scale_ratio>1:
+                # cut
+                gap_h, gap_w = new_h-h, new_w-w
+                img = img[gap_h//2:gap_h//2+h, gap_w//2:gap_w//2+w]
+                boxes_xcyc = boxes[:,:2] - [gap_w/2./w, gap_h/2./h]
+            if scale_ratio<1:
+                # pad
+                pad_h, pad_w = h-new_h, w-new_w
+                img = cv2.copyMakeBorder(img, top=pad_h//2, bottom=pad_h-pad_h//2,
+                                         left=pad_w//2, right=pad_w-pad_w//2,
+                                         borderType=cv2.BORDER_CONSTANT, value=0)
+                boxes_xcyc = boxes[:,:2] + [pad_w/2./w, pad_h/2./h]
+            boxes_wh = boxes[:,2:]
+            boxes = np.concatenate([boxes_xcyc, boxes_wh], axis=-1)
+
+    if random.uniform(0, 1)>0.5:
+        shift_h = random.randint(-20, 20)
+        shift_w = random.randint(-20, 20)
+        img = cv2.copyMakeBorder(img, top=40, bottom=40, left=40, right=40,
+                                 borderType=cv2.BORDER_CONSTANT, value=0)
+        start_h, start_w = 40+shift_h, 40+shift_w
+        img = img[start_h:start_h+h, start_w:start_w+w]
+        boxes_xcyc = boxes[:,:2] - [shift_w/w, shift_h/h]
+        boxes_wh = boxes[:,2:]
+        boxes = np.concatenate([boxes_xcyc, boxes_wh], axis=-1)
+
+    if random.uniform(0, 1)>0.5:
+        rotate_angle = random.uniform(-math.pi/18, math.pi/18)
+        tl = boxes[:,:2]*[w,h] + np.stack([-boxes[:,2]*w/2, -boxes[:,3]*h/2], axis=-1)
+        tr = boxes[:,:2]*[w,h] + np.stack([boxes[:,2]*w/2, -boxes[:,3]*h/2], axis=-1)
+        bl = boxes[:,:2]*[w,h] + np.stack([-boxes[:,2]*w/2, boxes[:,3]*h/2], axis=-1)
+        br = boxes[:,:2]*[w,h] + np.stack([boxes[:,2]*w/2, boxes[:,3]*h/2], axis=-1)
+        n_points = tl.shape[0]
+        points = list(tl) + list(tr) + list(bl) + list(br)
+        img, points = rotate_img(rotate_angle, img, points)
+        new_tl = np.array(points[:n_points])
+        new_tr = np.array(points[n_points:n_points*2])
+        new_bl = np.array(points[n_points*2:n_points*3])
+        new_br = np.array(points[n_points*3:])
+        left = np.minimum(new_tl[:,0], new_bl[:,0])
+        right = np.maximum(new_tr[:,0], new_br[:,0])
+        top = np.minimum(new_tl[:,1], new_tr[:,1])
+        bottom = np.maximum(new_bl[:,1], new_br[:,1])
+        xc = (left + right) / 2 / w
+        yc = (top + bottom) / 2 / h
+        w = np.abs(right - left) / w
+        h = np.abs(bottom - top) / h
+        boxes = np.stack([xc, yc, w, h], axis=-1)
+
+    aug_boxes = np.concatenate([boxes, labels], axis=-1)
+    boxes = valid_boxes(aug_boxes)
+
+    return img, boxes
+
+
+def valid_boxes(boxes):
+    valid_boxes = []
+    left = boxes[:, 0] - 0.5*boxes[:,2]
+    right = boxes[:, 0] + 0.5*boxes[:,2]
+    top = boxes[:, 1] - 0.5*boxes[:,3]
+    bottom = boxes[:, 1] + 0.5*boxes[:,3]
+
+    for i in range(boxes.shape[0]):
+        if 0<top[i]<1 and 0<bottom[i]<1 and 0<left[i]<1 and 0<right[i]<1:
+            valid_boxes.append(boxes[i])
+    return np.array(valid_boxes)
+
+
+def rotate_img(angle, img, points=[], interpolation=cv2.INTER_LINEAR):
+    h, w = img.shape
+    rotataMat = cv2.getRotationMatrix2D((w/2, h/2), math.degrees(angle), 1)
+    # img
+    rotate_img = cv2.warpAffine(img, rotataMat, (w, h), flags=interpolation, borderValue=(0,0,0))
+    # points
+    rotated_points = []
+    for point in points:
+        point = rotataMat.dot([[point[0]], [point[1]], [1]])
+        rotated_points.append((int(point[0]), int(point[1])))
+    return rotate_img, rotated_points
+
+
 if __name__ == '__main__':
 
     # anchors = get_anchors(anchors, strides=8)
@@ -110,7 +213,7 @@ if __name__ == '__main__':
 
     data_dir = "data/"
     batch_size = 1
-    input_shape = (480, 640)
+    input_shape = (480, 640)     # hw
     num_classes = 2
     strides = [8,16,32,64,128]
     train_generator = data_generator(data_dir, batch_size, input_shape, num_classes, anchors, strides=strides)
@@ -123,26 +226,25 @@ if __name__ == '__main__':
 
         for idx, s in enumerate(strides):
             gt = y_true[idx][0]
-            coords = np.where(gt[:,:,:,0]>0)
-            print(coords)
+            cls_prob = np.max(gt[:,:,:,4:], axis=-1)
+            coords = np.where(cls_prob>0.5)
+            print("strides: ", s, "n_objects: ", len(coords[0]))
 
-            if s==64:
+            img = image_batch[0, :,:,0]
+
+            if len(coords[0]):
                 # vis
-                img = cv2.imread("data/tux_hacking.jpg", 0)
-                box1 = gt[2,5,3]    # normed-rela-origin [xc, yc, w, h]
-                print(box1)
-                xc, yc, w, h = box1[:4]
-                cv2.rectangle(img, (int(640*(xc-w/2.)), int(480*(yc-h/2.))), (int(640*(xc+w/2.)), int(480*(yc+h/2.))), 255, 2)
-
-                box2 = gt[5,4,0]
-                print(box2)
-                xc, yc, w, h = box2[:4]
-                cv2.rectangle(img, (int(640*(xc-w/2.)), int(480*(yc-h/2.))), (int(640*(xc+w/2.)), int(480*(yc+h/2.))), 255, 2)
+                for obj in range(len(coords[0])):
+                    h,w,a = coords[0][obj], coords[1][obj], coords[2][obj]
+                    box = gt[h,w,a]    # normed-rela-origin [xc, yc, w, h]
+                    print(box)
+                    xc, yc, w, h = box[:4]
+                    cv2.rectangle(img, (int(640*(xc-w/2.)), int(480*(yc-h/2.))), (int(640*(xc+w/2.)), int(480*(yc+h/2.))), 255, 2)
 
                 cv2.imshow("tmp", img)
                 cv2.waitKey(0)
 
-        if idx>0:
+        if idx>100:
             break
 
 

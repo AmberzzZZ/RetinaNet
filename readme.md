@@ -41,9 +41,10 @@
 
 ## ytrue:
     cls: logits
-    box: rela-origin-[xc,yc,w,h]
-    match: 每个尺度上，每个gt box最多match一个anchor，
-           每个anchor也最多match一个gt box（iou最大的那个）
+    box: normed-rela-origin-[xc,yc,w,h]
+    match逻辑: 
+        1. 每个尺度上，每个gt box最多match一个anchor，每个anchor也最多match一个gt box（iou最大的那个）
+        2. 可以给gt box在每个尺度安排一个anchor box，也可以只在所属尺度安排一个
 
 
 

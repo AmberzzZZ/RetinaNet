@@ -45,10 +45,10 @@ def focal_loss(cls_true, cls_pred, alpha=0.25, gamma=2.0, from_logits=True):
 
 def smooth_l1(box_true, box_pred, from_logits=True):
     # |x|<1: 0.5*x*x, |x|>1: |x|-0.5
-    if from_logits:
-        box_pred_txy = K.tanh(box_pred[...,:2])
-        box_pred_twh = K.relu(box_pred[...,2:])
-        box_pred = K.concatenate([box_pred_txy, box_pred_twh])
+    # if from_logits:
+    #     box_pred_txy = K.tanh(box_pred[...,:2])
+    #     box_pred_twh = K.relu(box_pred[...,2:])
+    #     box_pred = K.concatenate([box_pred_txy, box_pred_twh])
     valid_mask = tf.cast(box_true>0., tf.float32)
     smooth_l1_ = tf.where(K.abs(box_pred-box_true)<1,
                           0.5*(box_pred-box_true)*(box_pred-box_true),
@@ -63,7 +63,7 @@ def origin2offset(box_true, stride, anchors, input_shape):
     #                     offset_x = (xc-a_xc)/wa
     #                     offset_y = (yc-a_yc)/ha
     #                     offset_w = log(w/wa)
-    #                     offset_h = log(h/wa)
+    #                     offset_h = log(h/ha)
 
     grid_shape = K.int_shape(box_true)[1:3]    # h,w
     grid_y = K.tile(K.reshape(K.arange(0, grid_shape[0]), [1,-1,1,1,1]), [1, 1, grid_shape[1], 1, 1])
