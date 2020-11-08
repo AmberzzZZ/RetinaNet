@@ -6,12 +6,13 @@ import os
 
 
 anchors = {'scale': [2**0, 2**(1/3.), 2**(2/3.)],
-           'ratio': [0.5, 1, 2],
+           'ratio': [0.8, 1, 1.5],
            'size': {8:32, 16:64, 32:128, 64:256, 128:512}}
 
 
-def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, strides=[8,16,32]):
-    # img: [b,h,w,1], y_true: multi-scales of [b,h,w,a,4+c]
+def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, strides=[8,16,32],
+                   negative_overlap=0.4, positive_overlap=0.5):
+    # img: [b,h,w,1], y_true: multi-scales of [b,h,w,a,4+c+1], additional-1 for anchor_state
     full_lst = [i.split('.txt')[0] for i in os.listdir(data_dir) if 'txt' in i]
     n_anchors = len(anchors['scale']) * len(anchors['ratio'])
     anchors = get_anchors(anchors, strides)   # list of arr, [9,2] for each level
@@ -37,50 +38,71 @@ def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, stri
             image_batch[i] = img
             if boxes.shape[0] <= 0:
                 continue
-
             input_shape = np.array(input_shape)
             boxes_xy = boxes[...,:2] * input_shape[::-1]
-            boxes_wh = boxes[...,2:4] * input_shape[::-1]
-            # tranverse strides, generate y_true
+            boxes_wh = boxes[...,2:4] * input_shape[::-1]     # abs rela-origin-xcycwh
+            boxes_abs = np.concatenate([boxes_xy, boxes_wh], axis=-1)
+
             for idx, s in enumerate(strides):
-                anchors_s = np.expand_dims(anchors[idx], axis=0)
-                anchor_maxes = anchors_s / 2.
-                anchor_mins = -anchor_maxes
+                anchors_wh = anchors[idx].reshape((1,-1,2))        # (1,N,2)
+                grid_h, grid_w = input_shape[0]//s, input_shape[1]//s    # hw
+                coords_x, coords_y = np.meshgrid(np.arange(grid_w),np.arange(grid_h))
+                anchors_xy = (np.stack([coords_x, coords_y], axis=-1).reshape((-1,1,2))+0.5)*s   # (h*w,1,2)
+                n_anchors_s = anchors_wh.shape[1]
+                n_grids_s = anchors_xy.shape[0]
+                anchors_wh = np.tile(anchors_wh, [n_grids_s, 1,1])
+                anchors_xy = np.tile(anchors_xy, [1, n_anchors_s,1])
+                anchors_abs = np.concatenate([anchors_xy,anchors_wh], axis=-1).reshape((-1,4))    # abs rela-origin-xcycwh, (h*w*n,4)
+                iou = cal_iou(boxes_abs.copy(), anchors_abs.copy())
+                # print("stride: ", s, "iou: ", np.max(iou, axis=-1))
 
-                box_maxes = boxes_wh / 2.
-                box_mins = -box_maxes
-                # center shift
-                grid_xy = np.floor(boxes_xy/s)
-                center_shift_xy = boxes_xy - (grid_xy+0.5)*s
-                box_maxes += center_shift_xy
-                box_mins += center_shift_xy
-                box_maxes = np.expand_dims(box_maxes, axis=1)
-                box_mins = np.expand_dims(box_mins, axis=1)
+                best_match_indices = np.argmax(iou, axis=-1)
+                best_match_iou = np.max(iou, axis=-1)
 
-                intersect_mins = np.maximum(box_mins, anchor_mins)
-                intersect_maxes = np.minimum(box_maxes, anchor_maxes)
-                intersect_wh = np.maximum(intersect_maxes - intersect_mins, 0.)
-                intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
-                box_area = boxes_wh[..., 0:1] * boxes_wh[..., 1:2]
-                anchor_area = anchors_s[..., 0] * anchors_s[..., 1]
-                iou = intersect_area / (box_area + anchor_area - intersect_area)
-                best_anchor = np.argmax(iou, axis=-1)
+                yt = np.zeros((anchors_abs.shape[0],4+num_classes+1))
+                for b in range(boxes.shape[0]):
+                    if best_match_iou[b] > positive_overlap:
+                        yt[best_match_indices[b]][:4] = boxes[b,:4]
+                        yt[best_match_indices[b]][4+int(boxes[b,-1])] = 1
+                        yt[best_match_indices[b]][-1] = 1
+                    elif best_match_iou[b] > negative_overlap:
+                        yt[best_match_indices[b]][-1] = -1
 
-                for box_idx, anchor_idx in enumerate(best_anchor):
-                    # print(iou[box_idx, anchor_idx])
-                    if iou[box_idx, anchor_idx] < 0.5:
-                        continue
-                    grid_w, grid_h = map(int, grid_xy[box_idx])
-                    if y_true[idx][i, grid_h,grid_w,anchor_idx,-1] > iou[box_idx, anchor_idx]:
-                        continue
-                    y_true[idx][i, grid_h,grid_w,anchor_idx,:4] = boxes[box_idx,:4]
-                    cls_id = int(boxes[box_idx][-1])
-                    y_true[idx][i, grid_h,grid_w,anchor_idx,4+cls_id] = 1
-                    y_true[idx][i, grid_h,grid_w,anchor_idx,-1] = iou[box_idx, anchor_idx]
-
-        y_true = [i[...,:-1] for i in y_true]
+                y_true[idx][i] = yt.reshape((grid_h, grid_w, n_anchors_s, -1))
 
         yield [image_batch, *y_true], np.zeros(batch_size)
+
+
+def cal_iou(boxes1, boxes2, epsilon=1e-5):
+
+    # convert xcycwh to x1y1x2y2
+    boxes1[:,0] -= 0.5*boxes1[:,2]
+    boxes1[:,1] -= 0.5*boxes1[:,3]
+    boxes1[:,2] += boxes1[:,0]
+    boxes1[:,3] += boxes1[:,2]
+    boxes2[:,0] -= 0.5*boxes2[:,2]
+    boxes2[:,1] -= 0.5*boxes2[:,3]
+    boxes2[:,2] += boxes2[:,0]
+    boxes2[:,3] += boxes2[:,2]
+
+    # boxes1: [N1,4], x1y1x2y2
+    # boxes2: [N2,4], x1y1x2y2
+    boxes1 = np.expand_dims(boxes1, axis=1)
+    boxes2 = np.expand_dims(boxes2, axis=0)
+
+    inter_mines = np.maximum(boxes1[...,:2], boxes2[...,:2])    # [N1,N2,2]
+    inter_maxes = np.minimum(boxes1[...,2:], boxes2[...,2:])
+    inter_wh = np.maximum(inter_maxes - inter_mines, 0.)
+    inter_area = inter_wh[...,0] * inter_wh[...,1]
+
+    box_area1 = (boxes1[...,2]-boxes1[...,0]) * (boxes1[...,3]-boxes1[...,1])
+    box_area1 = np.tile(box_area1, [1,np.shape(boxes2)[0]])
+    box_area2 = (boxes2[...,2]-boxes2[...,0]) * (boxes2[...,3]-boxes2[...,1])
+    box_area2 = np.tile(box_area2, [np.shape(boxes1)[0],1])
+
+    iou = inter_area / (box_area1 + box_area2 - inter_area + epsilon)
+
+    return iou
 
 
 def get_anchors(anchors, strides):
@@ -223,28 +245,29 @@ if __name__ == '__main__':
         print("image_batch: ", image_batch.shape, np.max(image_batch))
         y_true = x_batch[1:]
         print("y_true: ", [i.shape for i in y_true])
+        print("y_true: ", [np.unique(i[...,-1]) for i in y_true])
 
-        for idx, s in enumerate(strides):
-            gt = y_true[idx][0]
-            cls_prob = np.max(gt[:,:,:,4:], axis=-1)
-            coords = np.where(cls_prob>0.5)
-            print("strides: ", s, "n_objects: ", len(coords[0]))
+        # for idx, s in enumerate(strides):
+        #     gt = y_true[idx][0]
+        #     cls_prob = np.max(gt[:,:,:,4:], axis=-1)
+        #     coords = np.where(cls_prob>0.5)
+        #     print("strides: ", s, "n_objects: ", len(coords[0]))
 
-            img = image_batch[0, :,:,0]
+        #     img = image_batch[0, :,:,0]
 
-            if len(coords[0]):
-                # vis
-                for obj in range(len(coords[0])):
-                    h,w,a = coords[0][obj], coords[1][obj], coords[2][obj]
-                    box = gt[h,w,a]    # normed-rela-origin [xc, yc, w, h]
-                    print(box)
-                    xc, yc, w, h = box[:4]
-                    cv2.rectangle(img, (int(640*(xc-w/2.)), int(480*(yc-h/2.))), (int(640*(xc+w/2.)), int(480*(yc+h/2.))), 255, 2)
+        #     if len(coords[0]):
+        #         # vis
+        #         for obj in range(len(coords[0])):
+        #             h,w,a = coords[0][obj], coords[1][obj], coords[2][obj]
+        #             box = gt[h,w,a]    # normed-rela-origin [xc, yc, w, h]
+        #             # print("box: ", box)
+        #             xc, yc, w, h = box[:4]
+        #             cv2.rectangle(img, (int(640*(xc-w/2.)), int(480*(yc-h/2.))), (int(640*(xc+w/2.)), int(480*(yc+h/2.))), 255, 2)
 
-                cv2.imshow("tmp", img)
-                cv2.waitKey(0)
+        #         cv2.imshow("tmp", img)
+        #         cv2.waitKey(0)
 
-        if idx>100:
+        if idx>0:
             break
 
 

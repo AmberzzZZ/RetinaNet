@@ -5,7 +5,7 @@ from dataGenerator import get_anchors
 
 
 def det_loss(args, n_classes, anchors, strides, input_shape):
-    # *y_true: [B,H,W,a,c+4] for each resolution, start by x8level3
+    # *y_true: [B,H,W,a,4+c+1] for each resolution, start by x8level3
     # *cls_pred: [B,H,W,a,c] for each resolution
     # *box_pred: [B,H,W,a,4] for each resolution
     n_levels = len(strides)
@@ -18,11 +18,12 @@ def det_loss(args, n_classes, anchors, strides, input_shape):
     # tranverse strides
     loss = 0.
     for i, s in enumerate(strides):
-        # cls
-        cls_loss = focal_loss(y_true[i][...,4:4+n_classes], cls_preds[i], from_logits=True)
-        # reg
+        # cls: on positives & negatives
+        cls_loss = focal_loss(y_true[i][...,4:], cls_preds[i], from_logits=True)
+        # reg: on positives
         box_true = origin2offset(y_true[i][...,:4], s, anchors[i], input_shape)
-        box_loss = smooth_l1(box_true, box_preds[i], from_logits=True)
+        labels = y_true[i][...,-1]
+        box_loss = smooth_l1(box_true, box_preds[i], labels, from_logits=True)
 
         loss += cls_loss + box_loss
 
@@ -34,26 +35,34 @@ def det_loss(args, n_classes, anchors, strides, input_shape):
 def focal_loss(cls_true, cls_pred, alpha=0.25, gamma=2.0, from_logits=True):
     if from_logits:
         cls_pred = K.sigmoid(cls_pred)
-    pt = 1 - K.abs(cls_pred-cls_true)
+    indices = tf.where(cls_true[...,-1]>-1)
+    labels = tf.gather_nd(cls_true[...,-1:], indices)
+    alpha = tf.where(labels>0, tf.ones_like(alpha), tf.ones_like(1-alpha))
+    cls_gt = tf.gather_nd(cls_true[...,:-1], indices)
+    cls_pred = tf.gather_nd(cls_pred, indices)
+    pt = 1 - K.abs(cls_pred-cls_gt)
     pt = K.clip(pt, K.epsilon(), 1-K.epsilon())
-    focal_loss_ = -K.pow(1-pt, gamma) * K.log(pt)
-    focal_loss_ = tf.where(cls_true>0, (1-alpha)*focal_loss_, alpha*focal_loss_)
-    norm_term = K.maximum(1., K.sum(cls_true, axis=[1,2,3,4]))
+    focal_loss_ = -K.pow(1-pt, gamma) * K.log(pt) * alpha
+    norm_term = K.maximum(1., K.sum(labels, axis=[1,2,3,4]))
     focal_loss_ = K.sum(focal_loss_, axis=[1,2,3,4]) / norm_term
     return K.mean(focal_loss_)
 
 
-def smooth_l1(box_true, box_pred, from_logits=True):
-    # |x|<1: 0.5*x*x, |x|>1: |x|-0.5
+def smooth_l1(box_true, box_pred, labels, sigma=3., from_logits=True):
+    # |x|<1: 0.5*(sigma*x)*(sigma*x), |x|>1/sigma/sigma: |x|-0.5/sigma/sigma
     # if from_logits:
     #     box_pred_txy = K.tanh(box_pred[...,:2])
     #     box_pred_twh = K.relu(box_pred[...,2:])
     #     box_pred = K.concatenate([box_pred_txy, box_pred_twh])
-    valid_mask = tf.cast(box_true>0., tf.float32)
-    smooth_l1_ = tf.where(K.abs(box_pred-box_true)<1,
-                          0.5*(box_pred-box_true)*(box_pred-box_true),
-                          abs(box_pred-box_true)-0.5)
-    smooth_l1_ = K.sum(smooth_l1_*valid_mask, axis=[1,2,3,4])
+    sigma_squared = sigma ** 2
+    indices = tf.where(labels>0)
+    box_gt = tf.gather_nd(box_true, indices)
+    box_pred = tf.gather_nd(box_pred, indices)
+
+    smooth_l1_ = tf.where(K.abs(box_pred-box_gt)<1/sigma_squared,
+                          0.5*sigma_squared*(box_pred-box_gt)*(box_pred-box_gt),
+                          abs(box_pred-box_gt)-0.5/sigma_squared)
+    smooth_l1_ = K.sum(smooth_l1_, axis=[1,2,3,4])
     return K.mean(smooth_l1_)
 
 
