@@ -60,33 +60,45 @@ def fpn(feats, fpn_filters, strides):
     return [feature_dict[s] for s in strides]
 
 
-def cls_head(feats, n_filters, n_classes, n_anchors):
-    def shared_cls_head(x):
-        for i in range(4):
-            x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
-        x = Conv2D(n_classes*n_anchors, 3, strides=1, padding='same')(x)
-        h, w = K.int_shape(x)[1:3]
-        x = Reshape([h,w,n_anchors,n_classes])(x)
-        return x
+def shared_cls_head(n_filters, n_classes, n_anchors):
+    inpt = Input((None,None,n_filters))
+    x = inpt
+    for i in range(4):
+        x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
+    x = Conv2D(n_classes*n_anchors, 3, strides=1, padding='same')(x)
+    model = Model(inpt, x, name='shared_cls_head')
+    return model
 
+
+def cls_head(feats, n_filters, n_classes, n_anchors):
+    shared_cls_head_submodel = shared_cls_head(n_filters, n_classes, n_anchors)
     cls_outputs = []
     for x in feats:
-        cls_outputs.append(shared_cls_head(x))
+        x = shared_cls_head_submodel(x)
+        h, w = K.int_shape(x)[1:3]
+        x = Reshape([h,w,n_anchors,n_classes])(x)
+        cls_outputs.append(x)
     return cls_outputs
 
 
-def box_head(feats, n_filters, n_anchors):
-    def shared_box_head(x):
-        for i in range(4):
-            x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
-        x = Conv2D(4*n_anchors, 3, strides=1, padding='same')(x)
-        h, w = K.int_shape(x)[1:3]
-        x = Reshape([h,w,n_anchors,4])(x)
-        return x
+def shared_box_head(n_filters, n_anchors):
+    inpt = Input((None,None,n_filters))
+    x = inpt
+    for i in range(4):
+        x = Conv_BN(x, n_filters, 3, strides=1, activation='relu')
+    x = Conv2D(4*n_anchors, 3, strides=1, padding='same')(x)
+    model = Model(inpt, x, name='shared_box_head')
+    return model
 
+
+def box_head(feats, n_filters, n_anchors):
+    shared_box_head_submodel = shared_box_head(n_filters, n_anchors)
     box_outputs = []
     for x in feats:
-        box_outputs.append(shared_box_head(x))
+        x = shared_box_head_submodel(x)
+        h, w = K.int_shape(x)[1:3]
+        x = Reshape([h,w,n_anchors,4])(x)
+        box_outputs.append(x)
     return box_outputs
 
 
