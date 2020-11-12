@@ -36,6 +36,7 @@
 ## cls
     focal loss, normailization
     anchor state {-1:ignore, 0:negative, 1:positive}，negative和positive的anchor参与运算
+    ！！ tf.where: 判断array equal的时候要用tf.equal，不能== ！！
 
 ## box reg
     smooth l1 loss (huber loss)，前景positive参与运算

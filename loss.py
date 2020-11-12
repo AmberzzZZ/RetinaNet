@@ -1,7 +1,5 @@
 import keras.backend as K
 import tensorflow as tf
-import numpy as np
-from dataGenerator import get_anchors
 
 
 def det_loss(args, n_classes, anchors, strides, input_shape):
@@ -9,7 +7,6 @@ def det_loss(args, n_classes, anchors, strides, input_shape):
     # *cls_pred: [B,H,W,a,c] for each resolution
     # *box_pred: [B,H,W,a,4] for each resolution
     n_levels = len(strides)
-    anchors = np.float32(get_anchors(anchors, strides))
 
     cls_preds = args[:n_levels]
     box_preds = args[n_levels:n_levels*2]
@@ -36,7 +33,7 @@ def focal_loss(cls_true, cls_pred, labels, alpha=0.25, gamma=2.0, from_logits=Tr
     if from_logits:
         cls_pred = K.sigmoid(cls_pred)
     alpha_pos = tf.where(labels>0., labels*alpha, tf.zeros_like(labels))
-    alpha_neg = tf.where(labels==0., (1-labels)*(1-alpha), tf.zeros_like(labels))
+    alpha_neg = tf.where(tf.equal(labels, 0.), (1-labels)*(1-alpha), tf.zeros_like(labels))
     alpha_fac = alpha_pos + alpha_neg
     pt = 1 - K.abs(cls_pred-cls_true)
     pt = K.clip(pt, K.epsilon(), 1-K.epsilon())
@@ -52,7 +49,7 @@ def smooth_l1(box_true, box_pred, labels, sigma=.2, from_logits=True):
     #     box_pred_txy = K.tanh(box_pred[...,:2])
     #     box_pred_twh = K.relu(box_pred[...,2:])
     #     box_pred = K.concatenate([box_pred_txy, box_pred_twh])
-    valid_mask = tf.where(labels>0, tf.ones_like(labels), tf.zeros_like(labels))
+    valid_mask = tf.where(labels>0., tf.ones_like(labels), tf.zeros_like(labels))
     pt = tf.abs(box_true - box_pred)
     smooth_l1_ = tf.where(pt<sigma, 0.5*pt*pt/sigma, pt-0.5/sigma)
     smooth_l1_ = K.sum(smooth_l1_*valid_mask, axis=[1,2,3,4])

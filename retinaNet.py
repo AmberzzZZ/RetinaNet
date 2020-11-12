@@ -11,7 +11,7 @@ backbones = {'resnet': resnet, 'resnext': resnext}
 
 def retinaNet(input_tensor=None, input_shape=(256,256,3),
               backbone='resnet', depth=50, fpn_filters=256, n_classes=10,
-              anchors=anchors, strides=[8,16,32,64,128]):
+              n_anchors=9, anchors=anchors, strides=[8,16,32,64,128]):
     if input_tensor is not None:
         inpt = input_tensor
         input_shape = inpt._keras_shape[1:]
@@ -25,13 +25,12 @@ def retinaNet(input_tensor=None, input_shape=(256,256,3),
     x = fpn(x[1:], fpn_filters, strides)      # [8xP3, 128xP7]
 
     # head
-    n_anchors = len(anchors['scale']) * len(anchors['ratio'])
     cls_outputs = cls_head(x, fpn_filters, n_classes, n_anchors)
     box_outputs = box_head(x, fpn_filters, n_anchors)
 
     # y_true
     h, w = input_shape[:2]
-    y_true = [Input((h//s, w//s, n_anchors, n_classes+4)) for s in strides]
+    y_true = [Input((h//s, w//s, n_anchors, n_classes+4+1)) for s in strides]
 
     # loss
     retina_loss = Lambda(det_loss, arguments={'n_classes': n_classes, 'anchors': anchors, 'strides': strides, 'input_shape': input_shape[:2]})  \
@@ -53,8 +52,8 @@ def fpn(feats, fpn_filters, strides):
     P4 = add([C4, P5_up])
     P4_up = UpSampling2D(size=2, interpolation='nearest')(P4)
     P3 = add([C3, P4_up])
-    # P6 = Conv2D(fpn_filters, 3, strides=2, padding='same')(feats[-1])
-    P6 = Conv_BN(feats[-1], fpn_filters, 3, strides=2, activation='relu')
+    # p6p7
+    P6 = Conv_BN(P5, fpn_filters, 3, strides=2, activation='relu')
     P7 = Conv_BN(P6, fpn_filters, 3, strides=2, activation='relu')
     feature_dict = {8:P3, 16:P4, 32:P5, 64:P6, 128:P7}
     return [feature_dict[s] for s in strides]

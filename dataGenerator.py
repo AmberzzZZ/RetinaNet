@@ -13,7 +13,7 @@ anchors = {'scale': [2**0, 2**(1/3.), 2**(2/3.)],
 def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, strides=[8,16,32],
                    negative_overlap=0.4, positive_overlap=0.5):
     # img: [b,h,w,1], y_true: multi-scales of [b,h,w,a,4+c+1], additional-1 for anchor_state
-    full_lst = [i.split('.txt')[0] for i in os.listdir(data_dir) if 'txt' in i]
+    full_lst = [i.split('.png')[0] for i in os.listdir(data_dir) if 'png' in i]
     n_anchors = len(anchors['scale']) * len(anchors['ratio'])
     anchors = get_anchors(anchors, strides)   # list of arr, [9,2] for each level
 
@@ -24,11 +24,14 @@ def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, stri
                            n_anchors, 4+num_classes+1)) for s in strides]
         for i in range(batch_size):
             file_name = full_lst[i]
-            img = cv2.imread(os.path.join(data_dir, file_name+'.jpg'), 0)
+            img = cv2.imread(os.path.join(data_dir, file_name+'.png'), 0)
             if np.max(img)>1:
                 img = img / 255.
-            boxes = get_box(os.path.join(data_dir, file_name+'.txt'))
-            img, boxes = aug(img, boxes, input_shape)
+            if os.path.exists(os.path.join(data_dir, file_name+'.txt')):
+                boxes = get_box(os.path.join(data_dir, file_name+'.txt'))
+                img, boxes = aug(img, boxes, input_shape)
+            else:
+                boxes = np.zeros((0))
             # for obj in range(boxes.shape[0]):
             #     xc, yc, w, h = boxes[obj][:4]
             #     cv2.rectangle(img, (int(input_shape[1]*(xc-w/2.)),int(input_shape[0]*(yc-h/2.))), (int(input_shape[1]*(xc+w/2.)),int(input_shape[0]*(yc+h/2.))), 1, 2)
@@ -36,7 +39,9 @@ def data_generator(data_dir, batch_size, input_shape, num_classes, anchors, stri
             # cv2.waitKey(0)
             img = np.expand_dims(img, axis=-1)
             image_batch[i] = img
-            if boxes.shape[0] <= 0:
+            if boxes.shape[0] == 0:
+                for idx in range(len(strides)):
+                    y_true[idx][...,:-1] = 0.1
                 continue
             input_shape = np.array(input_shape)
             boxes_xy = boxes[...,:2] * input_shape[::-1]
@@ -113,7 +118,7 @@ def get_anchors(anchors, strides):
     anchors = []
     for s in strides:
         base_size = anchor_sizes[s]
-        anchors_s = base_size * np.tile(np.expand_dims(anchor_scales,axis=-1), (len(anchor_ratios),2))
+        anchors_s = base_size * np.tile(np.expand_dims(anchor_scales,axis=-1), (len(anchor_ratios),2)).astype(np.float32)
         anchors_s[:,0] = anchors_s[:,0] / np.sqrt(np.repeat(anchor_ratios, len(anchor_scales)))
         anchors_s[:,1] = anchors_s[:,0] * np.repeat(anchor_ratios, len(anchor_scales))
         anchors.append(anchors_s)
@@ -233,7 +238,7 @@ if __name__ == '__main__':
     # anchors = get_anchors(anchors, strides=8)
     # print(anchors)
 
-    data_dir = "data/"
+    data_dir = "data"
     batch_size = 1
     input_shape = (480, 640)     # hw
     num_classes = 2
