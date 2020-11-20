@@ -30,12 +30,15 @@ def det_loss(args, n_classes, anchors, strides, input_shape):
 
 
 def focal_loss(cls_true, cls_pred, labels, alpha=0.25, gamma=2.0, from_logits=True):
-    if from_logits:
-        cls_pred = K.sigmoid(cls_pred)
+
     alpha_pos = tf.where(labels>0., labels*alpha, tf.zeros_like(labels))
     alpha_neg = tf.where(tf.equal(labels, 0.), (1-labels)*(1-alpha), tf.zeros_like(labels))
     alpha_fac = alpha_pos + alpha_neg
-    pt = 1 - K.abs(cls_pred-cls_true)
+
+    if from_logits:
+        pt = 1 - K.abs(K.sigmoid(cls_pred)-cls_true)
+    else:
+        pt = 1 - K.abs(cls_pred-cls_true)
     pt = K.clip(pt, K.epsilon(), 1-K.epsilon())
     focal_loss_ = -K.pow(1-pt, gamma) * K.log(pt) * alpha_fac
     norm_term = K.maximum(1., K.sum(alpha_pos, axis=[1,2,3,4]))
@@ -51,7 +54,7 @@ def smooth_l1(box_true, box_pred, labels, sigma=.2, from_logits=True):
     #     box_pred = K.concatenate([box_pred_txy, box_pred_twh])
     valid_mask = tf.where(labels>0., tf.ones_like(labels), tf.zeros_like(labels))
     pt = tf.abs(box_true - box_pred)
-    smooth_l1_ = tf.where(pt<sigma, 0.5*pt*pt/sigma, pt-0.5/sigma)
+    smooth_l1_ = tf.where(pt<sigma, 0.5*pt*pt/sigma, pt-0.5*sigma)
     smooth_l1_ = K.sum(smooth_l1_*valid_mask, axis=[1,2,3,4])
     return K.mean(smooth_l1_)
 

@@ -32,6 +32,7 @@
     th = log(bh / ha)
     可以看成是针对anchor的平移和缩放参数
     mean & std: coco dataset有个0&0.2的normalization，参考https://github.com/fizyr/keras-retinanet/issues/1273
+    activation: 当输入的anchor A与GT相差较小时, 可以认为这种变换是一种线性变换, 因此不用安排激活函数（非线性变换）
 
 ## cls
     focal loss, normailization
