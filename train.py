@@ -13,7 +13,7 @@ if __name__ == '__main__':
         os.mkdir(weight_dir)
 
     # data
-    data_dir = "data/tmp"
+    data_dir = "data"
     batch_size = 1
     input_shape = (512, 512)     # hw
     num_classes = 2

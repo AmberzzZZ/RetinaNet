@@ -195,10 +195,12 @@ def aug(img, boxes, input_shape):
         right = np.maximum(new_tr[:,0], new_br[:,0])
         top = np.minimum(new_tl[:,1], new_tr[:,1])
         bottom = np.maximum(new_bl[:,1], new_br[:,1])
-        xc = (left + right) / 2 / w
-        yc = (top + bottom) / 2 / h
-        w = np.abs(right - left) / w
-        h = np.abs(bottom - top) / h
+        new_h = int(w*math.fabs(math.sin(rotate_angle)) + h*math.fabs(math.cos(rotate_angle)))
+        new_w = int(h*math.fabs(math.sin(rotate_angle)) + w*math.fabs(math.cos(rotate_angle)))
+        xc = (left + right) / 2 / new_w
+        yc = (top + bottom) / 2 / new_h
+        w = np.abs(right - left) / new_w
+        h = np.abs(bottom - top) / new_h
         boxes = np.stack([xc, yc, w, h], axis=-1)
 
     aug_boxes = np.concatenate([boxes, labels], axis=-1)
