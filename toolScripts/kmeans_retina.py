@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import math
 
 
 class Retina_Kmeans:
@@ -19,18 +20,22 @@ class Retina_Kmeans:
             f = open(os.path.join(self.label_dir, file), 'r')
             for line in f.readlines():
                 cls, xc, yc, w, h = map(float, line.strip().split(' '))   # normed
-                boxes.append([w, h])
+                if w<=0 or w>1 or h<=0 or h>1:
+                    continue
+                # norm
+                boxes.append([w/math.sqrt(w*h), h/math.sqrt(w*h)])
+
             f.close()
         boxes = np.array(boxes)
         return boxes
 
     def txt2yolo_clusters(self):
-        boxes = self.txt2boxes()
-        # boxes = np.random.uniform(0.2, 0.8, (200,2))   # for test
+        # boxes = self.txt2boxes()
+        boxes = np.random.uniform(0.2, 0.8, (200,2))   # for test
+        self.boxes = boxes    # real wh (not normed)
+        boxes = boxes / np.sqrt(np.prod(boxes, axis=-1, keepdims=True))
         clusters = self.kmeans(boxes, n_clusters=self.num_anchor_ratios)
         clusters = clusters[np.lexsort(clusters.T[0, None])]
-        print("K anchors:\n {}".format(clusters))
-        print("Accuracy: {:.2f}%".format(self.avg_iou(boxes, clusters) * 100))
         return clusters
 
     def txt2retina_ratios(self):
@@ -39,9 +44,11 @@ class Retina_Kmeans:
         ratios = ratios.round(1).reshape((1,-1,2))     # [1,N,2]
         anchors_sizes = np.array(self.anchor_sizes).reshape(-1, 1, 1)
         anchors = (ratios * anchors_sizes).reshape(-1,2)
-        print("ratios: ", ratios.reshape(-1,2))
+        self.anchor_ratios = ratios.reshape(-1,2)
+        print("ratios: \n", ratios.reshape(-1,2))
         print("anchors: ", anchors.shape)
-        self.result2txt(ratios.reshape(-1,2))
+        self.cal_accuray()
+        # self.result2txt(ratios.reshape(-1,2))
         return anchors
 
     def kmeans(self, boxes, n_clusters=3, dist=np.median):
@@ -65,7 +72,7 @@ class Retina_Kmeans:
 
     def iou(self, boxes, clusters):  # 1 box -> k clusters
         n = boxes.shape[0]
-        k = self.num_anchor_ratios
+        k = clusters.shape[0]
 
         box_area = boxes[:, 0] * boxes[:, 1]
         box_area = box_area.repeat(k)
@@ -91,6 +98,19 @@ class Retina_Kmeans:
         accuracy = np.mean([np.max(self.iou(boxes, clusters), axis=1)])
         return accuracy
 
+    def cal_accuray(self):
+        clusters = []
+        for size in self.anchor_sizes:
+            for ratio in self.anchor_ratios:
+                w, h = ratio * size / np.sqrt(np.prod(ratio)) / 512
+                clusters.append([w,h])
+        clusters = np.array(clusters)
+        print("accuray: ", self.avg_iou(self.boxes, clusters))
+
+        best_iou = np.max(self.iou(self.boxes, clusters), axis=1)     # [n_boxes]
+        print(np.min(best_iou))
+        print("missed boxes: ", np.sum(best_iou<0.4))
+
     def result2txt(self, data):
         f = open("retina_ratios.txt", 'w')
         row = np.shape(data)[0]
@@ -105,7 +125,7 @@ class Retina_Kmeans:
 
 if __name__ == "__main__":
 
-    label_dir = "data/"
+    label_dir = "./"
     kmeans = Retina_Kmeans(label_dir)
     kmeans.txt2retina_ratios()
 
